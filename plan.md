@@ -36,3 +36,11 @@ Browser chat UI -> FastAPI POST /chat
 - Secrets only in .env (gitignored)
 - Honest statuses: success / partial / failed / timeout
 - Demo sites: https://example.com, https://books.toscrape.com
+## Status (2026-11-16)
+All phases built and tested. Decisions made during the build:
+- LLM: Google Gemini via plain REST (`requests`, no SDK). Model chain gemini-3.5-flash-lite -> gemini-3.1-flash-lite -> gemini-3-flash-preview
+  (gemini-2.5-flash is closed to new keys). Rule-based fallbacks when the AI is unavailable, always labelled.
+- Runner uses Popen (not subprocess.run) to stream stderr live and support cancel; same shell=False / timeout / minimal env.
+- Prompt-injection demo pages served only when ALLOW_TESTPAGES=1, and only the exact /testpages/ prefix is exempt from the SSRF guard.
+- Exit code 1 added for internal crawler errors.
+See README.md for setup and docs/VIDEO_SCRIPT.md for the recording plan.
