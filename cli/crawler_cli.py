@@ -63,6 +63,16 @@ Fetched = namedtuple("Fetched", "url status content_type body truncated")
 TESTPAGES_PREFIX = None
 TESTPAGES_RE = re.compile(r"^http://127\.0\.0\.1:\d{2,5}/testpages/$")
 
+HIDDEN_STYLE_RE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+INSTRUCTION_RE = re.compile(
+    r"\b(?:ignore|disregard|forget)\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions|prompts?)"
+    r"|\bsystem\s+(?:prompt|message)\b"
+    r"|\byou\s+are\s+now\s+(?:in|a|an|the)\b"
+    r"|\breveal\b.{0,40}\b(?:prompt|api\s*keys?|passwords?)"
+    r"|\bcurl\s+\S+\s*\|\s*(?:ba)?sh\b",
+    re.I,
+)
+
 
 class InputError(Exception):
     """Bad or disallowed input -> exit 2."""
@@ -100,18 +110,51 @@ def validate_url(url):
     return p
 
 
-def check_host(hostname):
-    """SSRF guard: every address the host resolves to must be public."""
-    try:
-        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, UnicodeError):
-        raise FetchError(f"DNS resolution failed for '{hostname}'")
+_real_getaddrinfo = socket.getaddrinfo
+_BLOCKED = {"reason": None}
+
+
+def _non_public(infos):
+    """Return the first non-public address in a getaddrinfo() result, or None."""
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split("%")[0])
         if ip.version == 6 and ip.ipv4_mapped:
             ip = ip.ipv4_mapped
         if not ip.is_global or ip.is_multicast:
-            raise InputError(f"host '{hostname}' resolves to non-public address {ip}; blocked")
+            return ip
+    return None
+
+
+def check_host(hostname):
+    """SSRF pre-check: every address the host resolves to must be public (gives a clear error early)."""
+    try:
+        infos = _real_getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError):
+        raise FetchError(f"DNS resolution failed for '{hostname}'")
+    bad = _non_public(infos)
+    if bad is not None:
+        raise InputError(f"host '{hostname}' resolves to non-public address {bad}; blocked")
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):
+    """Connect-time SSRF guard (closes the DNS-rebinding gap).
+
+    The HTTP client resolves the host again when it connects. Because this process only crawls, we wrap
+    socket.getaddrinfo itself: the addresses checked here are exactly the ones the socket will connect to.
+    """
+    infos = _real_getaddrinfo(host, *args, **kwargs)
+    name = host.decode() if isinstance(host, bytes) else host
+    if TESTPAGES_PREFIX is not None and name == "127.0.0.1":
+        return infos  # demo mode; fetch() still limits URLs to the exact test prefix
+    bad = _non_public(infos)
+    if bad is not None:
+        _BLOCKED["reason"] = f"connection to non-public address {bad} blocked at connect time"
+        raise OSError(_BLOCKED["reason"])
+    return infos
+
+
+def install_connect_guard():
+    socket.getaddrinfo = _guarded_getaddrinfo
 
 
 def is_testpage(url):
@@ -127,8 +170,12 @@ def normalize(url):
 
 # ---------------------------------------------------------------- fetching
 
-def fetch(session, url, timeout, deadline=None, max_bytes=MAX_BYTES):
-    """GET with manual redirects so every hop passes the SSRF checks. Body is size-capped."""
+def fetch(session, url, timeout, deadline=None, max_bytes=MAX_BYTES, html_only=False):
+    """GET with manual redirects so every hop passes the SSRF checks. Body is size-capped.
+
+    html_only: decide from the headers alone and skip downloading bodies we would discard
+    (error pages, PDFs, images, JSON...).
+    """
     for _ in range(MAX_REDIRECTS + 1):
         p = validate_url(url)
         if not is_testpage(url):
@@ -140,6 +187,9 @@ def fetch(session, url, timeout, deadline=None, max_bytes=MAX_BYTES):
                     url = normalize(urljoin(url, resp.headers["location"]))
                     log(f"redirect -> {url}")
                     continue
+                ctype = resp.headers.get("Content-Type", "")
+                if html_only and (resp.status_code >= 400 or "html" not in ctype.lower()):
+                    return Fetched(url, resp.status_code, ctype, b"", False)
                 chunks, size, truncated = [], 0, False
                 for chunk in resp.iter_content(65536):
                     chunks.append(chunk)
@@ -150,12 +200,15 @@ def fetch(session, url, timeout, deadline=None, max_bytes=MAX_BYTES):
                     if deadline and time.monotonic() > deadline:
                         raise FetchError("total time budget exceeded while downloading")
                 body = b"".join(chunks)[:max_bytes]
-                return Fetched(url, resp.status_code, resp.headers.get("Content-Type", ""), body, truncated)
+                return Fetched(url, resp.status_code, ctype, body, truncated)
             finally:
                 resp.close()
         except requests.Timeout:
             raise FetchError(f"timed out after {timeout:.0f}s")
         except requests.RequestException as e:
+            if _BLOCKED["reason"]:
+                reason, _BLOCKED["reason"] = _BLOCKED["reason"], None
+                raise InputError(reason)
             raise FetchError(f"request failed ({type(e).__name__})")
     raise FetchError(f"more than {MAX_REDIRECTS} redirects")
 
@@ -227,12 +280,31 @@ def extract_page(fetched, depth):
 
     for tag in soup(["script", "style", "noscript", "template", "svg", "iframe", "head"]):
         tag.decompose()
+
+    # Untrusted-content signals, detected by the crawler itself (not dependent on the LLM noticing).
+    hidden_texts = []
+    for tag in soup.find_all(True):
+        style = tag.get("style") or ""
+        if HIDDEN_STYLE_RE.search(style) or tag.has_attr("hidden") or str(tag.get("aria-hidden", "")).lower() == "true":
+            t = " ".join(tag.get_text(" ").split())
+            if t:
+                hidden_texts.append(t)
+
     headings = []
     for h in soup.find_all(["h1", "h2", "h3"]):
         t = " ".join(h.get_text(" ").split())
         if t:
             headings.append({"level": h.name, "text": t[:200]})
     text = " ".join(soup.get_text(" ").split())
+
+    flags = []
+    for t in hidden_texts:
+        m = INSTRUCTION_RE.search(t)
+        if m:
+            flags.append({"type": "hidden_instructions", "snippet": _snippet(t, m)})
+    for m in INSTRUCTION_RE.finditer(text):
+        if not any(m.group(0) in t for t in hidden_texts):
+            flags.append({"type": "instruction_like_text", "snippet": _snippet(text, m)})
 
     page = {
         "url": fetched.url,
@@ -246,8 +318,15 @@ def extract_page(fetched, depth):
         "word_count": len(text.split()),
         "links": [{"url": u, "text": link_texts.get(u, "")} for u in links[:MAX_LINKS_REPORTED]],
         "links_found": len(links),
+        "hidden_text_blocks": len(hidden_texts),
+        "security_flags": flags[:5],
     }
     return page, links
+
+
+def _snippet(text, m, pad=60):
+    start, end = max(0, m.start() - pad), min(len(text), m.end() + pad)
+    return ("…" if start else "") + text[start:end].strip() + ("…" if end < len(text) else "")
 
 
 # ---------------------------------------------------------------- crawl
@@ -282,7 +361,7 @@ def crawl(start_url, limits, result, t0):
             req_timeout = max(1.0, min(limits["timeout"], deadline - time.monotonic()))
             started = time.monotonic()
             try:
-                f = fetch(session, url, req_timeout, deadline=deadline)
+                f = fetch(session, url, req_timeout, deadline=deadline, html_only=True)
             except (FetchError, InputError) as e:
                 if is_start:
                     raise
@@ -339,6 +418,7 @@ def crawl(start_url, limits, result, t0):
                         "hosts": robots.status, "skipped_urls": robots_skipped}
     result["stats"] = {
         "pages_crawled": len(pages),
+        "pages_with_security_flags": sum(1 for p in pages if p["security_flags"]),
         "page_errors": len(errors),
         "queued_not_crawled": len(queue),
         "budget_exhausted": budget_exhausted,
@@ -435,6 +515,7 @@ def main(argv=None):
         result["start_url"] = start
         if not is_testpage(start):
             check_host(urlparse(start).hostname)
+        install_connect_guard()
         log(f"start {start} (max_pages={limits['max_pages']}, max_depth={limits['max_depth']}, "
             f"timeout={limits['timeout']:.0f}s, budget={limits['total_timeout']:.0f}s)")
         code = crawl(start, limits, result, t0)

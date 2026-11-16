@@ -30,7 +30,8 @@ Task:
   * field: snake_case name (e.g. "site_name", "product_price", "contact_email").
   * value: the fact.
   * source_url: the exact url of the page it came from (must be one of the page urls given).
-  * evidence: a SHORT snippet (5-25 words) copied VERBATIM from that page's text that supports the value.
+  * evidence: a SHORT snippet (5-25 words) copied VERBATIM from that page's text that CONTAINS the value.
+  * For full product/article names prefer LINK TEXTS: the visible TEXT often truncates long titles with "...".
   * If the user requested specific fields, extract those first. If something was not found, do not invent it.
 - Never state anything that is not supported by the page content."""
 
@@ -99,22 +100,58 @@ def build_prompt(crawl, user_request, fields_requested):
     )
 
 
+def _tokens(text):
+    return [w for w in _norm(text).split() if len(w) > 2 or any(c.isdigit() for c in w)]
+
+
+def _value_in(value, text_norm, text_tokens):
+    """Is the extracted value supported by this (normalised) text?"""
+    v = _norm(value)
+    if not v:
+        return False
+    if v in text_norm:
+        return True
+    toks = _tokens(value)
+    return bool(toks) and sum(t in text_tokens for t in toks) / len(toks) >= 0.75
+
+
 def verify_evidence(extracted, crawl):
-    """Mark each extracted item verified=True only if its evidence snippet really appears on its source page."""
-    pages = {p["url"]: _norm(_page_corpus(p)) for p in crawl["pages"]}
+    """Grade every extracted fact against the crawled text of its source page.
+
+    verified     - the evidence snippet is on the page verbatim AND it contains the value
+    paraphrased  - the value is on the page, but the snippet is not an exact quote (or does not contain the value)
+    unverified   - anything else: wrong page, invented snippet, or a value the page does not support
+    Checking the value as well as the snippet matters: a model can quote a real sentence next to a wrong number.
+    """
+    pages = {}
+    for p in crawl["pages"]:
+        corpus = _norm(_page_corpus(p))
+        pages[p["url"]] = (corpus, set(corpus.split()))
     out = []
     for item in extracted[:MAX_FIELDS]:
         item = {k: str(item.get(k, "")).strip() for k in ("field", "value", "source_url", "evidence")}
-        corpus = pages.get(item["source_url"])
         ev = _norm(item["evidence"])
-        if corpus is None:
-            item["verified"], item["verification_note"] = False, "source_url is not one of the crawled pages"
+        level, note = "unverified", "evidence not found on the source page"
+        if item["source_url"] not in pages:
+            note = "source_url is not one of the crawled pages"
         elif len(ev) < 4:
-            item["verified"], item["verification_note"] = False, "evidence snippet too short to verify"
-        elif ev in corpus:
-            item["verified"], item["verification_note"] = True, "evidence found verbatim on the source page"
+            note = "evidence snippet too short to check"
         else:
-            item["verified"], item["verification_note"] = False, "evidence not found on the source page"
+            corpus, corpus_tokens = pages[item["source_url"]]
+            value_on_page = _value_in(item["value"], corpus, corpus_tokens)
+            if ev in corpus:
+                if _value_in(item["value"], ev, set(ev.split())):
+                    level, note = "verified", "quote found verbatim on the page and it contains the value"
+                elif value_on_page:
+                    level, note = "paraphrased", "quote is on the page but does not contain the value; the value appears elsewhere on the page"
+                else:
+                    note = "quote is on the page, but the value is not supported by it or by the page"
+            else:
+                ev_tokens = _tokens(item["evidence"])
+                coverage = sum(t in corpus_tokens for t in ev_tokens) / len(ev_tokens) if ev_tokens else 0
+                if coverage >= 0.8 and value_on_page:
+                    level, note = "paraphrased", f"quote is close to the page text ({coverage:.0%} of its words) and the value appears on the page"
+        item["verification"], item["verified"], item["verification_note"] = level, level == "verified", note
         out.append(item)
     return out
 
@@ -156,7 +193,8 @@ def summarize(crawl, user_request, fields_requested=None):
         "summary": result["summary"].strip(),
         "key_points": [str(k).strip() for k in result.get("key_points", [])][:8],
         "extracted": extracted,
-        "verified_count": sum(1 for x in extracted if x["verified"]),
+        "verified_count": sum(1 for x in extracted if x["verification"] == "verified"),
+        "paraphrased_count": sum(1 for x in extracted if x["verification"] == "paraphrased"),
         "source": source,
         "model": model,
         "note": note,
