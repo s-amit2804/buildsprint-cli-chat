@@ -8,6 +8,7 @@ Terminal test:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -24,6 +25,8 @@ from backend.validator import CrawlTask, InvalidRequest, testpages_prefix, valid
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
 STDERR_TAIL_CHARS = 4000
+MAX_STDOUT_BYTES = 8_000_000   # a misbehaving tool cannot exhaust backend memory
+MAX_STDERR_LINE = 2000
 
 # Allowlist: the backend can only ever run tools listed here.
 TOOL_REGISTRY = {
@@ -65,6 +68,9 @@ class RunResult:
     stderr: str = ""            # tail of the CLI log
     log_file: str | None = None
     warnings: list = field(default_factory=list)
+    pid: int | None = None
+    stdout_bytes: int = 0
+    stdout_sha256: str | None = None   # fingerprint of exactly what the CLI printed
 
     def to_dict(self):
         return asdict(self)
@@ -153,11 +159,12 @@ def new_run_id():
     return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
 
-def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None, run_id=None):
+def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None, run_id=None, save=True):
     """Run an approved tool and return a RunResult. Never raises for tool failures.
 
-    on_log(line):   called live for every stderr line (used for the chat's execution timeline)
+    on_log(line, elapsed_ms): called live for every stderr line (the chat's execution log)
     cancel_event:   threading.Event; when set, the process is killed and status becomes 'cancelled'
+    save:           write runs/<run_id>.json (the orchestrator turns this off and writes one full trace instead)
     """
     cmd = build_command(tool, task)
     timeout = timeout or TOOL_REGISTRY[tool]["timeout"]
@@ -167,6 +174,7 @@ def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None
     timed_out = cancelled = False
     exit_code = None
     out_chunks, err_lines = [], []
+    overflow = threading.Event()
 
     try:
         proc = subprocess.Popen(
@@ -179,15 +187,22 @@ def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None
 
     if proc is not None:
         def read_stdout():
-            out_chunks.append(proc.stdout.read())
+            total = 0
+            for chunk in iter(lambda: proc.stdout.read(65536), b""):
+                total += len(chunk)
+                if total > MAX_STDOUT_BYTES:
+                    overflow.set()
+                    proc.kill()
+                    return
+                out_chunks.append(chunk)
 
         def read_stderr():
             for raw in iter(proc.stderr.readline, b""):
-                line = redact(raw.decode("utf-8", errors="replace").rstrip())
+                line = redact(raw.decode("utf-8", errors="replace").rstrip())[:MAX_STDERR_LINE]
                 err_lines.append(line)
                 if on_log:
                     try:
-                        on_log(line)
+                        on_log(line, int((time.monotonic() - t0) * 1000))
                     except Exception:
                         pass
 
@@ -214,11 +229,14 @@ def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None
             t.join(timeout=5)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    stdout = redact(b"".join(c for c in out_chunks if c).decode("utf-8", errors="replace"))
+    raw_stdout = b"".join(out_chunks)
+    stdout = redact(raw_stdout.decode("utf-8", errors="replace"))
     stderr = "\n".join(err_lines)
 
     if cancelled:
         status, reason, data, warnings = "cancelled", "the run was cancelled by the user", None, []
+    elif overflow.is_set():
+        status, reason, data, warnings = "failed", f"the crawler printed more than {MAX_STDOUT_BYTES // 1_000_000} MB and was stopped", None, []
     elif proc is None:
         status, reason, data, warnings = "failed", "the crawler process could not be started", None, []
     else:
@@ -230,8 +248,11 @@ def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None
         status=status, reason=reason, exit_code=exit_code, timed_out=timed_out,
         duration_ms=duration_ms, started_at=started_at, data=data,
         stderr=stderr[-STDERR_TAIL_CHARS:], warnings=warnings,
+        pid=proc.pid if proc is not None else None,
+        stdout_bytes=len(raw_stdout), stdout_sha256=hashlib.sha256(raw_stdout).hexdigest() if raw_stdout else None,
     )
-    result.log_file = save_log(result)
+    if save:
+        result.log_file = save_log(result)
     return result
 
 
@@ -252,7 +273,8 @@ def _main():
     r = run_tool("site_crawler", task, timeout=a.timeout)
     print(f"command   : {' '.join(r.command)}")
     print(f"status    : {r.status.upper()}  -  {r.reason}")
-    print(f"exit code : {r.exit_code}   timed out: {r.timed_out}   duration: {r.duration_ms} ms")
+    print(f"exit code : {r.exit_code}   timed out: {r.timed_out}   duration: {r.duration_ms} ms   pid: {r.pid}")
+    print(f"stdout    : {r.stdout_bytes} bytes, sha256 {r.stdout_sha256}")
     if r.data:
         print(f"pages     : {[p['url'] for p in r.data['pages']]}")
     for w in r.warnings:
