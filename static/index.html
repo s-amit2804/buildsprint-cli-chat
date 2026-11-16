@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI Chat Crawler</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --text: #1b1f24; --muted: #5f6b7a; --border: #dde2e8;
+  --accent: #2f6fde; --accent-text: #ffffff; --code-bg: #0f1720; --code-text: #d6e2ee;
+  --ok: #1a7f4b; --ok-bg: #e3f5ea; --warn: #9a6200; --warn-bg: #fdf1dc; --bad: #b42335; --bad-bg: #fbe5e8;
+  --info: #3d5a80; --info-bg: #e6edf6; --j-key: #7cc4ff; --j-str: #a5d6a7; --j-num: #ffcc80; --j-lit: #f48fb1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #1d232c; --text: #e6edf3; --muted: #94a1b2; --border: #2b333e;
+    --accent: #4c8dff; --code-bg: #0a0d12; --ok: #4cc38a; --ok-bg: #12301f; --warn: #e3b341; --warn-bg: #33270d;
+    --bad: #ff7b8a; --bad-bg: #3a151b; --info: #9db8de; --info-bg: #1a2433;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+header .sub { color: var(--muted); font-size: 13px; }
+.pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.pill.ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+.pill.warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.spacer { flex: 1; }
+main { flex: 1; overflow-y: auto; padding: 20px 16px 8px; }
+.wrap { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.msg-user { align-self: flex-end; background: var(--accent); color: var(--accent-text); padding: 10px 14px; border-radius: 14px 14px 4px 14px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; overflow: hidden; }
+.welcome h2 { margin: 0 0 6px; font-size: 16px; }
+.welcome p { margin: 0 0 12px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
+.chip:hover { border-color: var(--accent); }
+.chip small { color: var(--muted); }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.badge { font-size: 12px; font-weight: 700; letter-spacing: .04em; padding: 3px 9px; border-radius: 6px; text-transform: uppercase; }
+.b-running { color: var(--info); background: var(--info-bg); }
+.b-success { color: var(--ok); background: var(--ok-bg); }
+.b-partial { color: var(--warn); background: var(--warn-bg); }
+.b-failed, .b-timeout, .b-rejected, .b-cancelled { color: var(--bad); background: var(--bad-bg); }
+.b-not_run { color: var(--muted); background: var(--panel-2); }
+.meta { color: var(--muted); font-size: 12.5px; }
+.steps { list-style: none; margin: 12px 0 4px; padding: 0; display: grid; gap: 4px; }
+.steps li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; font-size: 13.5px; }
+.steps .ic { text-align: center; }
+.steps .d { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.s-done .ic { color: var(--ok); } .s-failed .ic { color: var(--bad); } .s-running .ic { color: var(--info); }
+.spin { display: inline-block; width: 11px; height: 11px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: sp .8s linear infinite; vertical-align: -1px; }
+@keyframes sp { to { transform: rotate(360deg); } }
+details { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+details > summary { cursor: pointer; padding: 7px 11px; font-size: 13px; font-weight: 600; color: var(--muted); user-select: none; }
+details[open] > summary { border-bottom: 1px solid var(--border); }
+details > .body { padding: 10px 12px; }
+pre { margin: 0; background: var(--code-bg); color: var(--code-text); padding: 10px 12px; border-radius: 8px; font: 12.5px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; overflow: auto; max-height: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log { max-height: 220px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+.result-msg { margin: 12px 0 0; padding: 9px 12px; border-radius: 8px; font-size: 14px; }
+.rm-success { background: var(--ok-bg); color: var(--ok); } .rm-partial { background: var(--warn-bg); color: var(--warn); }
+.rm-bad { background: var(--bad-bg); color: var(--bad); } .rm-info { background: var(--info-bg); color: var(--info); }
+h3 { font-size: 14px; margin: 16px 0 6px; }
+.summary { margin: 0; }
+ul.points { margin: 0; padding-left: 20px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; }
+td.ev { color: var(--muted); font-style: italic; }
+.v-ok { color: var(--ok); font-weight: 600; white-space: nowrap; } .v-no { color: var(--warn); font-weight: 600; white-space: nowrap; }
+a { color: var(--accent); }
+.btns { display: flex; gap: 8px; margin: 0 0 8px; }
+button.small { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+button.small:hover { border-color: var(--accent); }
+.j-key { color: var(--j-key); } .j-str { color: var(--j-str); } .j-num { color: var(--j-num); } .j-lit { color: var(--j-lit); }
+footer { border-top: 1px solid var(--border); background: var(--panel); padding: 12px 16px; }
+form { max-width: 920px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+textarea { flex: 1; min-width: 0; resize: none; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); min-height: 46px; max-height: 160px; }
+textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+button.primary, button.stop { font: inherit; font-weight: 600; padding: 11px 18px; border-radius: 10px; border: 0; cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-text); }
+button.primary:disabled { opacity: .5; cursor: default; }
+button.stop { background: var(--bad-bg); color: var(--bad); }
+.hint { max-width: 920px; margin: 6px auto 0; color: var(--muted); font-size: 12px; }
+@media (max-width: 600px) {
+  header { padding: 10px 16px; } main { padding: 14px 16px 8px; } .msg-user { max-width: 92%; }
+  .kv { grid-template-columns: 1fr; } .kv dt { margin-top: 4px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>CLI Chat Crawler</h1>
+  <span class="sub">natural language → validated task → real CLI process → verified answer</span>
+  <span class="spacer"></span>
+  <span class="pill" id="llmPill">checking AI…</span>
+  <span class="pill" title="The backend can only run tools from a fixed allowlist, with shell=False">allowlisted CLI · shell=False</span>
+</header>
+
+<main id="main"><div class="wrap" id="chat">
+  <div class="card welcome">
+    <h2>Ask me to crawl a public website</h2>
+    <p>I'll work out what you want, run the approved crawler CLI on the server, check its exit code and output, then return a summary and structured JSON. Every extracted fact comes with a snippet of evidence that the server checks against the crawled text.</p>
+    <div class="chips" id="chips"></div>
+  </div>
+</div></main>
+
+<footer>
+  <form id="form">
+    <textarea id="input" rows="1" maxlength="4000" placeholder="e.g. Crawl https://books.toscrape.com, summarise it and return book titles and prices as JSON"></textarea>
+    <button type="submit" class="primary" id="send">Send</button>
+    <button type="button" class="stop" id="stop" hidden>Cancel</button>
+  </form>
+  <div class="hint">Enter to send · Shift+Enter for a new line · Only public http(s) sites are allowed; robots.txt is respected.</div>
+</footer>
+
+<script>
+"use strict";
+// SECURITY NOTE: everything shown here (page titles, summaries, logs) can contain text from untrusted
+// websites, so all of it is inserted with textContent / DOM nodes - never innerHTML.
+
+const $ = (id) => document.getElementById(id);
+const chat = $("chat"), main = $("main"), input = $("input"), sendBtn = $("send"), stopBtn = $("stop");
+let currentRun = null, controller = null;
+
+const EXAMPLES = [
+  ["Crawl https://example.com, extract the important information, give me a summary, and return the extracted data in JSON format.", "mandatory demo"],
+  ["Crawl 3 pages of https://books.toscrape.com and return book titles and prices as JSON", "multi-page + extraction"],
+  ["Summarise http://169.254.169.254/latest/meta-data", "blocked: cloud metadata IP"],
+  ["Crawl https://www.google.com/search?q=test", "blocked by robots.txt"],
+  ["Crawl https://this-domain-does-not-exist-xyz.com", "unreachable site"],
+];
+
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k === "text") n.textContent = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) n.append(c);
+  return n;
+}
+const scrollDown = () => { main.scrollTop = main.scrollHeight; };
+
+function addChips(extra) {
+  const box = $("chips");
+  box.replaceChildren();
+  for (const [text, label] of EXAMPLES.concat(extra || [])) {
+    box.append(el("button", { class: "chip", type: "button", title: text, onclick: () => { input.value = text; send(); } },
+      label, " ", el("small", { text: "· " + (text.length > 48 ? text.slice(0, 48) + "…" : text) })));
+  }
+}
+
+async function loadHealth() {
+  const pill = $("llmPill");
+  try {
+    const h = await (await fetch("/api/health")).json();
+    if (h.llm_configured) { pill.textContent = "AI: Gemini (" + h.models[0] + ")"; pill.className = "pill ok"; }
+    else { pill.textContent = "AI: off — rule-based fallback"; pill.className = "pill warn"; }
+    addChips(h.testpages_enabled ? [["Summarise http://127.0.0.1:" + location.port + "/testpages/ and its menu page", "prompt-injection test page"]] : []);
+  } catch { pill.textContent = "backend unreachable"; pill.className = "pill warn"; addChips(); }
+}
+
+// ---------- JSON pretty view (tokenised into spans; no innerHTML) ----------
+function jsonView(obj) {
+  const text = JSON.stringify(obj, null, 2);
+  const pre = el("pre");
+  const re = /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) pre.append(text.slice(last, m.index));
+    const t = m[0];
+    const cls = t.startsWith('"') ? (m[2] ? "j-key" : "j-str") : /true|false|null/.test(t) ? "j-lit" : "j-num";
+    pre.append(el("span", { class: cls, text: t }));
+    last = re.lastIndex;
+  }
+  pre.append(text.slice(last));
+  return pre;
+}
+
+// ---------- one assistant turn ----------
+class Turn {
+  constructor() {
+    this.badge = el("span", { class: "badge b-running" }, el("span", { class: "spin" }), " running");
+    this.meta = el("span", { class: "meta" });
+    this.steps = el("ul", { class: "steps" });
+    this.stepEls = {};
+    this.extra = el("div");
+    this.logPre = el("pre", { class: "log" });
+    this.logBox = el("details", { open: "" }, el("summary", { text: "Live execution log (CLI stderr)" }), el("div", { class: "body" }, this.logPre));
+    this.logBox.hidden = true;
+    this.out = el("div");
+    this.card = el("div", { class: "card" }, el("div", { class: "row" }, this.badge, this.meta), this.steps, this.extra, this.logBox, this.out);
+    chat.append(this.card);
+    scrollDown();
+  }
+  setBadge(status) {
+    const label = { not_run: "not run" }[status] || status;
+    this.badge.className = "badge b-" + status;
+    this.badge.replaceChildren(label);
+  }
+  step(s) {
+    let li = this.stepEls[s.id];
+    if (!li) { li = el("li"); this.stepEls[s.id] = li; this.steps.append(li); }
+    const ic = s.state === "running" ? el("span", { class: "spin" }) : s.state === "done" ? "✓" : "✗";
+    li.className = "s-" + s.state;
+    li.replaceChildren(el("span", { class: "ic" }, ic), el("span", {}, s.label, s.detail ? el("div", { class: "d", text: s.detail }) : null));
+    scrollDown();
+  }
+  plan(p) {
+    const dl = el("dl", { class: "kv" });
+    const add = (k, v) => { if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) return; dl.append(el("dt", { text: k }), el("dd", { text: Array.isArray(v) ? v.join(", ") : String(v) })); };
+    add("understood as", p.explanation); add("task", p.task); add("url", p.url); add("max pages", p.max_pages); add("max depth", p.max_depth);
+    add("fields requested", p.fields_requested); add("JSON requested", p.wants_json ? "yes" : "no"); add("parsed by", p.parsed_by); add("notes", p.notes);
+    this.extra.append(el("details", {}, el("summary", { text: "Execution plan (from the intent layer)" }), el("div", { class: "body" }, dl)));
+  }
+  command(c) {
+    const argv = c.argv.map((a) => (/[\s"]/.test(a) ? JSON.stringify(a) : a)).join(" ");
+    this.extra.append(el("details", { open: "" }, el("summary", { text: `CLI invocation · shell=${c.shell} · timeout ${c.timeout_s}s` }),
+      el("div", { class: "body" }, el("pre", { text: argv }))));
+    this.logBox.hidden = false;
+  }
+  log(line) {
+    this.logPre.append(line + "\n");
+    this.logPre.scrollTop = this.logPre.scrollHeight;
+  }
+  execution(x) {
+    this.meta.textContent = `run ${x.run_id} · exit code ${x.exit_code ?? "—"} · ${(x.duration_ms / 1000).toFixed(1)}s`;
+  }
+  final(f) {
+    this.setBadge(f.status || "failed");
+    this.logBox.open = false;
+    const good = f.status === "success", part = f.status === "partial";
+    const cls = good ? "rm-success" : part ? "rm-partial" : f.kind === "clarify" ? "rm-info" : "rm-bad";
+    const prefix = good ? "✓ Real crawl completed: " : part ? "⚠ Partial result: ": f.kind === "clarify" ? "" : "✗ ";
+    this.out.append(el("div", { class: "result-msg " + cls, text: prefix + f.message }));
+    if (f.detail) this.out.append(el("div", { class: "meta", style: "margin-top:6px", text: f.detail }));
+    for (const w of (f.execution && f.execution.warnings) || []) this.out.append(el("div", { class: "result-msg rm-partial", text: "⚠ " + w }));
+    if (f.summary_note) this.out.append(el("div", { class: "result-msg rm-partial", text: "⚠ " + f.summary_note }));
+
+    if (f.summary) {
+      this.out.append(el("h3", { text: "Summary" }), el("p", { class: "summary", text: f.summary }));
+    }
+    if (f.key_points && f.key_points.length) {
+      this.out.append(el("h3", { text: "Key points" }), el("ul", { class: "points" }, ...f.key_points.map((k) => el("li", { text: k }))));
+    }
+    if (f.extracted && f.extracted.length) {
+      const ok = f.extracted.filter((x) => x.verified).length;
+      const tbody = el("tbody");
+      for (const x of f.extracted) {
+        let host = x.source_url; try { host = new URL(x.source_url).pathname || "/"; } catch {}
+        tbody.append(el("tr", {},
+          el("td", { text: x.field }), el("td", { text: x.value }), el("td", { class: "ev", text: "“" + x.evidence + "”" }),
+          el("td", {}, /^https?:\/\//.test(x.source_url) ? el("a", { href: x.source_url, target: "_blank", rel: "noopener noreferrer", text: host }) : x.source_url),
+          el("td", { class: x.verified ? "v-ok" : "v-no", title: x.verification_note, text: x.verified ? "✓ verified" : "⚠ unverified" })));
+      }
+      this.out.append(el("h3", { text: `Extracted data · ${ok}/${f.extracted.length} evidence snippets verified against the crawled text` }),
+        el("div", { class: "table-wrap" }, el("table", {}, el("thead", {}, el("tr", {}, ...["field", "value", "evidence", "source", "check"].map((h) => el("th", { text: h })))), tbody)));
+    }
+    if (f.json) {
+      const text = JSON.stringify(f.json, null, 2);
+      const copy = el("button", { class: "small", type: "button", text: "Copy JSON", onclick: async () => {
+        try { await navigator.clipboard.writeText(text); copy.textContent = "Copied ✓"; } catch { copy.textContent = "Copy failed"; }
+        setTimeout(() => (copy.textContent = "Copy JSON"), 1500);
+      } });
+      const dl = el("button", { class: "small", type: "button", text: "Download .json", onclick: () => {
+        const a = el("a", { href: URL.createObjectURL(new Blob([text], { type: "application/json" })), download: `crawl-${f.execution.run_id}.json` });
+        a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      } });
+      const box = el("details", f.json_requested ? { open: "" } : {}, el("summary", { text: "Structured JSON result (valid JSON, built by the server from the crawl)" }),
+        el("div", { class: "body" }, el("div", { class: "btns" }, copy, dl), jsonView(f.json)));
+      this.out.append(box);
+    }
+    if (f.stderr && !good) {
+      this.out.append(el("details", {}, el("summary", { text: "CLI stderr (captured)" }), el("div", { class: "body" }, el("pre", { text: f.stderr }))));
+    }
+    scrollDown();
+  }
+}
+
+// ---------- SSE over fetch (POST) ----------
+async function send() {
+  const message = input.value.trim();
+  if (!message || controller) return;
+  chat.append(el("div", { class: "msg-user", text: message }));
+  input.value = ""; autosize();
+  const turn = new Turn();
+  controller = new AbortController();
+  sendBtn.disabled = true; stopBtn.hidden = false;
+  let gotFinal = false;
+  try {
+    const res = await fetch("/api/chat/stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }), signal: controller.signal });
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        let ev = "message", data = "";
+        for (const line of chunk.split("\n")) {
+          if (line.startsWith("event: ")) ev = line.slice(7);
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (!data) continue;
+        const p = JSON.parse(data);
+        if (ev === "start") currentRun = p.run_id;
+        else if (ev === "step") turn.step(p);
+        else if (ev === "plan") turn.plan(p);
+        else if (ev === "command") turn.command(p);
+        else if (ev === "log") turn.log(p.line);
+        else if (ev === "execution") turn.execution(p);
+        else if (ev === "final") { gotFinal = true; turn.final(p); }
+      }
+    }
+    if (!gotFinal) turn.final({ kind: "error", status: "failed", message: "The connection closed before a result arrived. No result is shown because none was confirmed." });
+  } catch (e) {
+    if (!gotFinal) turn.final(e.name === "AbortError"
+      ? { kind: "error", status: "cancelled", message: "Cancelled. The crawler process was stopped on the server." }
+      : { kind: "error", status: "failed", message: "Could not reach the backend (" + e.message + ")." });
+  } finally {
+    controller = null; currentRun = null;
+    sendBtn.disabled = false; stopBtn.hidden = true; input.focus();
+  }
+}
+
+stopBtn.addEventListener("click", async () => {
+  const run = currentRun;
+  if (run) { try { await fetch("/api/cancel/" + encodeURIComponent(run), { method: "POST" }); } catch {} }
+  setTimeout(() => controller && controller.abort(), 1500); // give the server a moment to report 'cancelled'
+});
+$("form").addEventListener("submit", (e) => { e.preventDefault(); send(); });
+function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 160) + "px"; }
+input.addEventListener("input", autosize);
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+loadHealth();
+input.focus();
+</script>
+</body>
+</html>

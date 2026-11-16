@@ -58,6 +58,11 @@ SKIP_EXTENSIONS = (
 
 Fetched = namedtuple("Fetched", "url status content_type body truncated")
 
+# Opt-in exception for the local prompt-injection demo pages. Only ever an exact
+# http://127.0.0.1:<port>/testpages/ prefix (enforced in main); None means no exception at all.
+TESTPAGES_PREFIX = None
+TESTPAGES_RE = re.compile(r"^http://127\.0\.0\.1:\d{2,5}/testpages/$")
+
 
 class InputError(Exception):
     """Bad or disallowed input -> exit 2."""
@@ -109,6 +114,10 @@ def check_host(hostname):
             raise InputError(f"host '{hostname}' resolves to non-public address {ip}; blocked")
 
 
+def is_testpage(url):
+    return TESTPAGES_PREFIX is not None and url.startswith(TESTPAGES_PREFIX)
+
+
 def normalize(url):
     """Strip fragment, lowercase scheme/host, ensure a path."""
     url, _ = urldefrag(url)
@@ -122,7 +131,8 @@ def fetch(session, url, timeout, deadline=None, max_bytes=MAX_BYTES):
     """GET with manual redirects so every hop passes the SSRF checks. Body is size-capped."""
     for _ in range(MAX_REDIRECTS + 1):
         p = validate_url(url)
-        check_host(p.hostname)
+        if not is_testpage(url):
+            check_host(p.hostname)
         try:
             resp = session.get(url, timeout=timeout, allow_redirects=False, stream=True)
             try:
@@ -313,6 +323,8 @@ def crawl(start_url, limits, result, t0):
 
             if depth < limits["max_depth"]:
                 for link in links:
+                    if is_testpage(start_url) and not is_testpage(link):
+                        continue  # test mode: never wander outside the test prefix
                     if urlparse(link).hostname in allowed_hosts and link not in seen:
                         seen.add(link)
                         queue.append((link, depth + 1))
@@ -398,6 +410,7 @@ def build_parser():
     p.add_argument("--max-depth", type=int, default=DEFAULTS["max_depth"], help=f"link depth from start page (cap {CAPS['max_depth']})")
     p.add_argument("--timeout", type=float, default=DEFAULTS["timeout"], help=f"per-request timeout seconds (cap {CAPS['timeout']:.0f})")
     p.add_argument("--total-timeout", type=float, default=DEFAULTS["total_timeout"], help=f"whole-run time budget seconds (cap {CAPS['total_timeout']:.0f})")
+    p.add_argument("--testpages-prefix", default=None, help=argparse.SUPPRESS)  # demo only, see README
     return p
 
 
@@ -408,13 +421,20 @@ def main(argv=None):
     t0 = time.monotonic()
     raw_url = args.url.strip()
     result = base_result(raw_url)
+    global TESTPAGES_PREFIX
     try:
         limits, result["clamped"] = resolve_limits(args)
         result["limits"] = limits
+        if args.testpages_prefix is not None:
+            if not TESTPAGES_RE.match(args.testpages_prefix):
+                raise InputError("invalid --testpages-prefix")
+            TESTPAGES_PREFIX = args.testpages_prefix
+            log(f"TEST MODE: local demo pages under {TESTPAGES_PREFIX} are allowed")
         validate_url(raw_url)
         start = normalize(raw_url)
         result["start_url"] = start
-        check_host(urlparse(start).hostname)
+        if not is_testpage(start):
+            check_host(urlparse(start).hostname)
         log(f"start {start} (max_pages={limits['max_pages']}, max_depth={limits['max_depth']}, "
             f"timeout={limits['timeout']:.0f}s, budget={limits['total_timeout']:.0f}s)")
         code = crawl(start, limits, result, t0)

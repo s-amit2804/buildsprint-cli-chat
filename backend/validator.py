@@ -5,6 +5,7 @@ Nothing reaches the CLI unless it passed through validate_task(). The CLI re-che
 """
 
 import ipaddress
+import os
 import socket
 from urllib.parse import urlparse
 
@@ -18,6 +19,14 @@ LIMITS = {
 
 class InvalidRequest(Exception):
     """Raised with a message that is safe to show in the chat."""
+
+
+def testpages_prefix():
+    """Opt-in (ALLOW_TESTPAGES=1) exception for the local prompt-injection demo pages; None otherwise."""
+    if os.environ.get("ALLOW_TESTPAGES", "").strip() != "1":
+        return None
+    port = os.environ.get("APP_PORT", "8000").strip()
+    return f"http://127.0.0.1:{port}/testpages/" if port.isdigit() else None
 
 
 def _is_public(ip):
@@ -82,6 +91,9 @@ class CrawlTask(BaseModel):
             raise ValueError("URL has no hostname")
         if p.username or p.password:
             raise ValueError("URLs with embedded credentials are not allowed")
+        prefix = testpages_prefix()
+        if prefix and v.startswith(prefix) and ".." not in v:
+            return v
         check_public_host(p.hostname)
         return v
 

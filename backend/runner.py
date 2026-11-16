@@ -1,6 +1,6 @@
 """runner.py - starts an APPROVED CLI tool as a subprocess and captures what really happened.
 
-Flow:  CrawlTask -> build_command() -> subprocess.run(list, shell=False, timeout) ->
+Flow:  CrawlTask -> build_command() -> subprocess.Popen(list, shell=False) + timeout/cancel watchdog ->
        capture stdout / stderr / exit code -> interpret() -> RunResult (+ audit log in runs/)
 
 Terminal test:
@@ -12,13 +12,14 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backend.validator import CrawlTask, InvalidRequest, validate_task
+from backend.validator import CrawlTask, InvalidRequest, testpages_prefix, validate_task
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
@@ -54,7 +55,7 @@ class RunResult:
     run_id: str
     tool: str
     command: list
-    status: str                 # success | partial | failed | timeout
+    status: str                 # success | partial | failed | timeout | cancelled
     reason: str
     exit_code: int | None
     timed_out: bool
@@ -74,7 +75,7 @@ def build_command(tool, task: CrawlTask):
     if tool not in TOOL_REGISTRY:
         raise InvalidRequest(f"tool '{tool}' is not in the approved tool registry")
     spec = TOOL_REGISTRY[tool]
-    return [
+    cmd = [
         sys.executable, "-I",              # -I: isolated mode, ignores PYTHON* env vars and user site-packages
         str(spec["script"]),
         "--url", task.url,                 # validated: always starts with http(s)://, so it can't be read as a flag
@@ -82,6 +83,10 @@ def build_command(tool, task: CrawlTask):
         "--max-depth", str(task.max_depth),
         "--total-timeout", str(spec["crawl_budget"]),
     ]
+    prefix = testpages_prefix()
+    if prefix and task.url.startswith(prefix):
+        cmd += ["--testpages-prefix", prefix]
+    return cmd
 
 
 def safe_env():
@@ -144,31 +149,77 @@ def save_log(result: RunResult):
         return None
 
 
-def run_tool(tool, task: CrawlTask, timeout=None):
-    """Run an approved tool and return a RunResult. Never raises for tool failures."""
+def new_run_id():
+    return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+
+
+def run_tool(tool, task: CrawlTask, timeout=None, on_log=None, cancel_event=None, run_id=None):
+    """Run an approved tool and return a RunResult. Never raises for tool failures.
+
+    on_log(line):   called live for every stderr line (used for the chat's execution timeline)
+    cancel_event:   threading.Event; when set, the process is killed and status becomes 'cancelled'
+    """
     cmd = build_command(tool, task)
     timeout = timeout or TOOL_REGISTRY[tool]["timeout"]
-    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+    run_id = run_id or new_run_id()
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     t0 = time.monotonic()
-    timed_out, exit_code = False, None
+    timed_out = cancelled = False
+    exit_code = None
+    out_chunks, err_lines = [], []
 
     try:
-        proc = subprocess.run(
-            cmd, shell=False, capture_output=True, timeout=timeout,
-            env=safe_env(), cwd=ROOT, stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(
+            cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL, env=safe_env(), cwd=ROOT,
         )
-        stdout_b, stderr_b, exit_code = proc.stdout, proc.stderr, proc.returncode
-    except subprocess.TimeoutExpired as e:   # subprocess.run has already killed the child
-        stdout_b, stderr_b, timed_out = e.stdout or b"", e.stderr or b"", True
     except OSError as e:
-        stdout_b, stderr_b = b"", f"could not start tool: {type(e).__name__}".encode()
+        proc = None
+        err_lines.append(f"could not start tool: {type(e).__name__}")
+
+    if proc is not None:
+        def read_stdout():
+            out_chunks.append(proc.stdout.read())
+
+        def read_stderr():
+            for raw in iter(proc.stderr.readline, b""):
+                line = redact(raw.decode("utf-8", errors="replace").rstrip())
+                err_lines.append(line)
+                if on_log:
+                    try:
+                        on_log(line)
+                    except Exception:
+                        pass
+
+        readers = [threading.Thread(target=read_stdout, daemon=True), threading.Thread(target=read_stderr, daemon=True)]
+        for t in readers:
+            t.start()
+        deadline = t0 + timeout
+        while True:
+            try:
+                exit_code = proc.wait(timeout=0.2)
+                break
+            except subprocess.TimeoutExpired:
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                elif time.monotonic() >= deadline:
+                    timed_out = True
+                else:
+                    continue
+                proc.kill()          # hard stop; the crawler has no children of its own
+                proc.wait()
+                exit_code = None
+                break
+        for t in readers:
+            t.join(timeout=5)
 
     duration_ms = int((time.monotonic() - t0) * 1000)
-    stdout = redact(stdout_b.decode("utf-8", errors="replace"))
-    stderr = redact(stderr_b.decode("utf-8", errors="replace"))
+    stdout = redact(b"".join(c for c in out_chunks if c).decode("utf-8", errors="replace"))
+    stderr = "\n".join(err_lines)
 
-    if exit_code is None and not timed_out:
+    if cancelled:
+        status, reason, data, warnings = "cancelled", "the run was cancelled by the user", None, []
+    elif proc is None:
         status, reason, data, warnings = "failed", "the crawler process could not be started", None, []
     else:
         status, reason, data, warnings = interpret(exit_code, timed_out, stdout, timeout)
