@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.1",
+  "status": "success",
+  "request": {
+    "url": "https://books.toscrape.com",
+    "max_pages": 3,
+    "max_depth": 1
+  },
+  "site": {
+    "start_url": "https://books.toscrape.com/",
+    "final_url": "https://books.toscrape.com/",
+    "title": "All products | Books to Scrape - Sandbox",
+    "description": null
+  },
+  "summary": "Books to Scrape is a demo website specifically designed for web scraping practice, featuring a catalog of 1,000 fictional book listings. The crawled pages include the main product index, the general books category, and a specific travel category. Each listing provides a title, price, and availability status, though the data is randomly assigned for demonstration purposes. The site organizes books into various genres such as Travel, Mystery, and Historical Fiction.",
+  "key_points": [
+    "The website is a sandbox environment for web scraping purposes.",
+    "Prices and ratings are randomly assigned and have no real-world meaning.",
+    "The catalog contains 1,000 results across various categories.",
+    "Book prices are listed in British Pounds (£).",
+    "The Travel category specifically contains 11 book results.",
+    "Books are listed with stock status, such as 'In stock'."
+  ],
+  "extracted_data": [
+    {
+      "field": "book_title",
+      "value": "A Light in the ...",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "A Light in the ... £51.77 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_price",
+      "value": "£51.77",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "A Light in the ... £51.77 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_title",
+      "value": "Tipping the Velvet",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "Tipping the Velvet £53.74 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_price",
+      "value": "£53.74",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "Tipping the Velvet £53.74 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_title",
+      "value": "Soumission",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "Soumission £50.10 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_price",
+      "value": "£50.10",
+      "source_url": "https://books.toscrape.com/",
+      "evidence": "Soumission £50.10 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_title",
+      "value": "It's Only the Himalayas",
+      "source_url": "https://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+      "evidence": "It's Only the Himalayas £45.17 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_price",
+      "value": "£45.17",
+      "source_url": "https://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+      "evidence": "It's Only the Himalayas £45.17 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_title",
+      "value": "Full Moon over Noah’s ...",
+      "source_url": "https://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+      "evidence": "Full Moon over Noah’s ... £49.43 In stock",
+      "verification": "verified"
+    },
+    {
+      "field": "book_price",
+      "value": "£49.43",
+      "source_url": "https://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+      "evidence": "Full Moon over Noah’s ... £49.43 In stock",
+      "verification": "verified"
+    }
+  ],
+  "pages": [
+    {
+      "url": "https://books.toscrape.com/",
+      "title": "All products | Books to Scrape - Sandbox",
+      "meta_description": null,
+      "headings": [
+        "All products",
+        "A Light in the ...",
+        "Tipping the Velvet",
+        "Soumission",
+        "Sharp Objects",
+        "Sapiens: A Brief History ...",
+        "The Requiem Red",
+        "The Dirty Little Secrets ...",
+        "The Coming Woman: A ...",
+        "The Boys in the ..."
+      ],
+      "word_count": 309,
+      "links_found": 73
+    },
+    {
+      "url": "https://books.toscrape.com/catalogue/category/books_1/index.html",
+      "title": "Books | Books to Scrape - Sandbox",
+      "meta_description": null,
+      "headings": [
+        "Books",
+        "A Light in the ...",
+        "Tipping the Velvet",
+        "Soumission",
+        "Sharp Objects",
+        "Sapiens: A Brief History ...",
+        "The Requiem Red",
+        "The Dirty Little Secrets ...",
+        "The Coming Woman: A ...",
+        "The Boys in the ..."
+      ],
+      "word_count": 307,
+      "links_found": 73
+    },
+    {
+      "url": "https://books.toscrape.com/catalogue/category/books/travel_2/index.html",
+      "title": "Travel | Books to Scrape - Sandbox",
+      "meta_description": null,
+      "headings": [
+        "Travel",
+        "It's Only the Himalayas",
+        "Full Moon over Noah’s ...",
+        "See America: A Celebration ...",
+        "Vagabonding: An Uncommon Guide ...",
+        "Under the Tuscan Sun",
+        "A Summer In Europe",
+        "The Great Railway Bazaar",
+        "A Year in Provence ...",
+        "The Road to Little ..."
+      ],
+      "word_count": 219,
+      "links_found": 63
+    }
+  ],
+  "errors": [],
+  "security": {
+    "flags": [],
+    "pages_flagged": 0
+  },
+  "execution": {
+    "tool": "site_crawler",
+    "run_id": "20261116-215324-49937b",
+    "pid": 22740,
+    "exit_code": 0,
+    "duration_ms": 4368,
+    "stdout_bytes": 23605,
+    "stdout_sha256": "8dc6526e699c6fcb5c1ecd5030f60b272906522cb1e3dd09089744dbce60644d",
+    "pages_crawled": 3,
+    "robots_txt": {
+      "https://books.toscrape.com": "not_found"
+    },
+    "robots_skipped_urls": []
+  },
+  "provenance": {
+    "intent_parsed_by": "gemini-3.5-flash-lite",
+    "summary_generated_by": "gemini-3-flash-preview",
+    "evidence": {
+      "verified": 10,
+      "paraphrased": 0,
+      "unverified": 0
+    },
+    "timings_ms": {
+      "intent": 1989,
+      "validate": 0,
+      "execute": 4369,
+      "summarize": 22842,
+      "verify": 0
+    }
+  }
+}

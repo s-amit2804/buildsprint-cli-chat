@@ -43,4 +43,4 @@ All phases built and tested. Decisions made during the build:
 - Runner uses Popen (not subprocess.run) to stream stderr live and support cancel; same shell=False / timeout / minimal env.
 - Prompt-injection demo pages served only when ALLOW_TESTPAGES=1, and only the exact /testpages/ prefix is exempt from the SSRF guard.
 - Exit code 1 added for internal crawler errors.
-See README.md for setup and docs/VIDEO_SCRIPT.md for the recording plan.
+See README.md for setup.
